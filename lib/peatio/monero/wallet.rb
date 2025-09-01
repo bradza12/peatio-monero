@@ -1,23 +1,62 @@
-# Wallet implementation for Monero
+module Peatio
+  module Monero
     class Wallet < Peatio::Wallet::Abstract
-      def initialize
-        @client = Client.new(ENV['MONERO_RPC_ENDPOINT'] || 'http://localhost:18081/json_rpc')
+      DEFAULT_FEATURES = { skip_deposit_collection: false }.freeze
+
+      def initialize(custom_features = {})
+        @features = DEFAULT_FEATURES.merge(custom_features).slice(*SUPPORTED_FEATURES)
+        @settings = {}
       end
 
-      def configure(settings)
-        # Wallet settings (e.g., deposit/withdrawal addresses)
+      def configure(settings={})
+        # Clean client state during configure.
+        @client = nil
+
+        @settings.merge!(settings.slice(*SUPPORTED_SETTINGS))
+
+        @wallet = @settings.fetch(:wallet) {
+          raise Peatio::Wallet::MissingSettingError, :wallet
+        }.slice(:uri, :address)
+
+        @currency = @settings.fetch(:currency) {
+          raise Peatio::Wallet::MissingSettingError, :currency
+        }.slice(:id, :base_factor, :options)
       end
 
-      def create_address!(options = {})
-        json_rpc('getnewaddress')['address']
+      def create_address!(_options={})
+        options.merge!(account_index: wallet.account_index)
+        @client.create_address!(options)
       end
 
-      def create_transaction!(transaction)
-        result = json_rpc('transfer', [
-          'destinations' => [{ 'amount' => transaction[:amount].to_i * 1_000_000_000_000, 'address' => transaction[:to_address] }],
-          'priority' => 0
-        ])
-        { txid: result['tx_hash'] }
+      def create_transaction!(transaction, options={})
+        txid = client.json_rpc(:sendtoaddress,
+                               [
+                                 transaction.to_address,
+                                 transaction.amount,
+                                 "",
+                                 "",
+                                 options[:subtract_fee].to_s == "true" # subtract fee from transaction amount.
+                               ])
+        transaction.hash = txid
+        transaction
+      rescue Monero::Client::Error => e
+        raise Peatio::Wallet::ClientError, e
+      end
+
+      def load_balance!
+        client.load_balance!(address,
+                           currency,
+                           { account_index: wallet.account_index,
+                             address_index: wallet.address_index })
+      rescue Monero::Client::Error => e
+        raise Peatio::Wallet::ClientError, e
+      end
+
+      private
+
+      def client
+        uri = @wallet.fetch(:uri) { raise Peatio::Wallet::MissingSettingError, :uri }
+        @client ||= Client.new(uri)
       end
     end
   end

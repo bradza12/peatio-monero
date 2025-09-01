@@ -1,40 +1,110 @@
-    # Blockchain implementation for Monero
+# frozen_string_literal: true
+
+module Peatio
+  module Monero
+    # TODO: Processing of unconfirmed transactions from mempool isn't supported now.
     class Blockchain < Peatio::Blockchain::Abstract
-      def initialize
-        @client = Client.new(ENV['MONERO_RPC_ENDPOINT'] || 'http://localhost:18081/json_rpc')
+      DEFAULT_FEATURES = {case_sensitive: true, cash_addr_format: false}.freeze
+
+      def initialize(custom_features={})
+        super
+        @json_rpc_call_id  = 0
+        @json_rpc_endpoint = URI.parse(blockchain.server + "/json_rpc")
       end
 
-      def configure(settings)
-        # Configure currency settings (e.g., case sensitivity for addresses)
-        settings[:currencies].each do |currency|
-          currency[:case_sensitive] = false # Monero addresses are case-insensitive
-        end
-      end
-
-      def latest_block_number
-        json_rpc('get_block_count')['count']
+      def configure(settings={})
+        # Clean client state during configure.
+        @client = nil
+        @settings.merge!(settings.slice(*SUPPORTED_SETTINGS))
       end
 
       def fetch_block!(block_number)
-        block_hash = json_rpc('get_block_hash', [block_number])['block_hash']
-        block = json_rpc('get_block', ['block_hash' => block_hash])
-        # Map Monero block transactions to Peatio's expected format
-        transactions = block['tx_hashes'].map do |txid|
-          tx = json_rpc('get_transaction', ['txid' => txid])
-          {
-            txid: txid,
-            from_address: tx['from_address'],
-            to_address: tx['to_address'],
-            amount: tx['amount'].to_i / 1_000_000_000_000, # Convert piconero to XMR
-            confirmations: tx['confirmations'],
-            status: tx['status']
-          }
+          # Don't start process if we didn't receive new blocks.
+        if blockchain.height + blockchain.min_confirmations >= latest_block && !force
+          Rails.logger.info { "Skip synchronization. No new blocks detected height: #{blockchain.height}, latest_block: #{latest_block}" }
+          fetch_unconfirmed_deposits
+          return
         end
-        transactions
+
+        from_block   = blockchain.height || 0
+        to_block     = [latest_block, from_block + blocks_limit].min
+
+        (from_block..to_block).each do |block_id|
+          Rails.logger.info { "Started processing #{blockchain.key} block number #{block_id}." }
+
+          block_data = { id: block_id }
+          block_data[:deposits]    = build_deposits(client.get_transfers(
+                                                            block_id - 1,
+                                                            block_id,
+                                                            { account_index: deposit_wallet.account_index,
+                                                              deposit: true }))
+
+          block_data[:withdrawals] = build_withdrawals(client.get_transfers(
+                                                                block_id - 1,
+                                                                block_id,
+                                                                { account_index: withdraw_wallet.account_index,
+                                                                  withdraw: true }))
+
+          save_block(block_data, latest_block)
+
+          Rails.logger.info { "Finished processing #{blockchain.key} block number #{block_id}." }
+        end
+        
+        Peatio::Block.new(block_number, block_txs)
+      rescue Client::Error => e
+        raise Peatio::Blockchain::ClientError, e
       end
 
-      def load_balance_of_address!(address)
-        balance = json_rpc('get_balance', ['address' => address])['unlocked_balance']
-        balance.to_i / 1_000_000_000_000 # Convert piconero to XMR
+      def latest_block_number
+        Rails.cache.fetch "latest_#{self.class.name.underscore}_block_number", expires_in: 5.seconds do
+          json_rpc({method: 'get_height', params: {}}).fetch('result').fetch('height')
+        end
+      rescue Client::Error => e
+        raise Peatio::Blockchain::ClientError, e
+      end
+
+      def load_balance_of_address!(address, _currency_id)
+        params = {account_index: options[:account_index], address_indices: [0]}
+        json_rpc({method: 'get_balance', params: params})
+          .fetch('balance')
+          .yield_self { |amount| convert_from_base_unit(amount, currency) }
+
+        raise Peatio::Blockchain::UnavailableAddressBalanceError, address if address_with_balance.blank?
+
+        address_with_balance[1].to_d
+      rescue Client::Error => e
+        raise Peatio::Blockchain::ClientError, e
+      end
+
+      private
+
+      def filter_vout(tx_hash)
+        tx_hash.fetch("vout").select do |entry|
+          entry.fetch("value").to_d.positive? && entry["scriptPubKey"].has_key?("addresses")
+        end
+      end
+
+      def build_transaction(tx_hash)
+        entries = tx.fetch('destinations').map.with_index do |destination, index|
+        { amount:  convert_from_base_unit(destination.fetch('amount'), currency),
+          address: normalize_address(destination.fetch("address")),
+          txout:   index 
+        }
+        end
+
+        { id:            normalize_txid(tx.fetch('txid')),
+          block_number:  tx.fetch('height') == 0 ? nil : tx.fetch('height'),
+          entries:       entries
+        }
+      end
+
+      def client
+        @client ||= Client.new(settings_fetch(:server))
+      end
+
+      def settings_fetch(key)
+        @settings.fetch(key) { raise Peatio::Blockchain::MissingSettingError, key.to_s }
       end
     end
+  end
+end
