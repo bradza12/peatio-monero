@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 module BlockchainService
-  class Monero < Peatio::BlockchainService::Base
+  class Monero < Peatio::Blockchain::Abstract
     # Rough number of blocks per hour for Nxt is 6.
     def process_blockchain(blocks_limit: 6, force: false)
       latest_block = client.latest_block_number

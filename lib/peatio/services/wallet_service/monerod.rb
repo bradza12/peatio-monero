@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 module WalletService
-  class Monerod < Peatio::WalletService::Base
+  class Monerod < Peatio::Wallet::Abstract
 
     def create_address(options = {})
       options.merge!(account_index: wallet.account_index)
