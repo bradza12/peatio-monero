@@ -1,10 +1,10 @@
-require 'peatio/services/blockchain_service/monero'
-require 'peatio/services/wallet_service/monerod'
-require 'peatio/client/blockchain_client/monero'
-require 'peatio/client/wallet_client/monerod'
+require 'peatio'
 
 module Peatio
   module Monero
-    require "peatio/monero/version"
-  end
-end
+    require 'peatio/monero/blockchain'
+    require 'peatio/monero/client'
+    require 'peatio/monero/wallet'
+    require 'peatio/monero/hooks'
+    require 'peatio/monero/railtie' if defined?(Rails)
+    require 'peatio/monero/version'
