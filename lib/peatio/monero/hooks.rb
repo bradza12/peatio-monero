@@ -28,8 +28,8 @@ module Peatio
         end
 
         def register
-          Peatio::Blockchain.registry[:dash] = Monero::Blockchain
-          Peatio::Wallet.registry[:dashd] = Monero::Wallet
+          Peatio::Blockchain.registry[:monero] = Monero::Blockchain
+          Peatio::Wallet.registry[:monero] = Monero::Wallet
         end
       end
 
