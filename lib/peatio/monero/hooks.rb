@@ -3,8 +3,8 @@
 module Peatio
   module Monero
     module Hooks
-      BLOCKCHAIN_VERSION_REQUIREMENT = "~> 0.18.4.2"
-      WALLET_VERSION_REQUIREMENT = "~> 0.18.4.2"
+      BLOCKCHAIN_VERSION_REQUIREMENT = "~> 1.0.0"
+      WALLET_VERSION_REQUIREMENT = "~> 1.0.0"
 
       class << self
         def check_compatibility
